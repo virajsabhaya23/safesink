@@ -1,0 +1,118 @@
+name: pr-report
+
+# The verification workflow runs with a read-only token, because it starts the
+# server under test - which may be code from the pull request. This separate
+# workflow is the safe half of `pull_request_target`: it downloads the evidence
+# that run produced and posts the sticky comment, but it checks out nothing and
+# executes no code from the pull request.
+
+on:
+  workflow_run:
+    workflows: ["mcp-conformance"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+concurrency:
+  group: pr-report-${{ github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download the evidence artifact from the pull-request run
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: safesink-mcp-conformance
+          path: evidence
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Resolve the pull request
+        id: pull-request
+        uses: actions/github-script@v7
+        env:
+          SAFESINK_PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+          SAFESINK_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        with:
+          script: |
+            // workflow_run.pull_requests is populated for a pull request from a
+            // branch in this repository only. It is empty for a fork, which is the
+            // case this reporter exists for, so fall back to the open pull request
+            // whose head commit is the one the verification run tested.
+            const direct = Number(process.env.SAFESINK_PR || 0);
+            if (direct) return direct;
+            const head = process.env.SAFESINK_HEAD_SHA;
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              ...context.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const match = pulls.find((pull) => pull.head && pull.head.sha === head);
+            if (!match) {
+              core.notice('No open pull request matches this run; no comment posted.');
+              return 0;
+            }
+            return match.number;
+      - name: Post or update the sticky comment
+        if: steps.pull-request.outputs.result != '0'
+        uses: actions/github-script@v7
+        env:
+          SAFESINK_MARKDOWN: evidence/report.md
+          SAFESINK_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          SAFESINK_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          SAFESINK_NUMBER: ${{ steps.pull-request.outputs.result }}
+        with:
+          script: |
+            const fs = require('fs');
+            // Shared with the composite action's comment step.
+            const marker = '<!-- safesink-report -->';
+            const number = Number(process.env.SAFESINK_NUMBER);
+            if (!number) return;
+            let body;
+            try {
+              body = fs.readFileSync(process.env.SAFESINK_MARKDOWN, 'utf8');
+            } catch (error) {
+              body =
+                'SafeSink produced no Markdown report for this run (' +
+                process.env.SAFESINK_CONCLUSION +
+                '). See the [workflow run](' +
+                process.env.SAFESINK_RUN_URL +
+                ') and its artefact before reading anything into the verdict.';
+            }
+            // The report describes an untrusted pull request: neutralise
+            // @-mentions so a tool name cannot page a person, and keep the
+            // comment well inside GitHub's size limit.
+            body = body.slice(0, 60000).replace(/@/g, '@\u200b');
+            body =
+              marker +
+              '\n> Posted from [the verification run](' +
+              process.env.SAFESINK_RUN_URL +
+              ') by a separate workflow with no access to the code it checked.\n\n' +
+              body;
+            const {owner, repo} = context.repo;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (comment) => comment.body && comment.body.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number: number, body});
+            }

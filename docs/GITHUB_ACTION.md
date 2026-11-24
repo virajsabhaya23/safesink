@@ -70,10 +70,20 @@ in the calling workflow - the snippet above does, and the repository's own
 - `contents: read` is enough to run checks. Add `pull-requests: write` only if
   you want the comment.
 - A `pull_request` from a fork runs with a read-only token, so the comment step
-  fails there. Set `comment: false` for fork PRs, or use `pull_request_target`
-  only with a checked-out base ref and no execution of fork code. Verification
-  starts the server under test, so never run it on untrusted changes with a
-  writable token.
+  cannot post there. Verification starts the server under test, so giving that
+  job a writable token is exactly the wrong trade. Post the comment from a
+  separate `workflow_run` workflow instead: it downloads the evidence the
+  read-only run produced and writes the comment, and it never checks out or
+  executes anything from the pull request. That is the safe part of
+  `pull_request_target` without its checkout footgun. The repository's own
+  `mcp-conformance.yml` / `pr-report.yml` pair is a working example: set
+  `comment: false` on the action, upload the report as an artifact, and let the
+  reporter use the `<!-- safesink-report -->` marker to update one comment.
+- The reporter resolves the pull request from the run's head commit when
+  `workflow_run.pull_requests` is empty, which is exactly what happens for a
+  fork pull request, so those runs still get one updated comment.
+- The reporter treats the report as untrusted text: it neutralises `@`-mentions
+  and truncates the body, so a tool named `@someone` cannot page a reviewer.
 - Pin the action to a tag or commit for reproducibility.
 
 ## Marketplace listing
