@@ -19,9 +19,11 @@ from .certificates import (
 )
 from .host_config import HostConfigError, existing_config_paths, load_host_config
 from .mcp_client import McpClientError
+from .mcp_compare import CompareError, compare_reports, load_report
 from .mcp_lint import lint_manifest, lint_tools
 from .mcp_reports import (
     render_badge_svg,
+    render_compare_markdown,
     render_markdown_report,
     write_json_report,
     write_junit_report,
@@ -38,6 +40,8 @@ from .mcp_scan import (
     write_manifest,
 )
 from .mcp_verifier import (
+    MANIFEST_SCHEMA,
+    MANIFEST_SCHEMA_V2,
     ManifestError,
     load_manifest,
     load_suppressions,
@@ -75,6 +79,28 @@ def _parse_sqlite_queries(
         if not separator or not database.strip() or not query.strip():
             _die(parser, f"--sqlite-query expects DATABASE=SQL, got {entry!r}")
         queries.append((database.strip(), query.strip()))
+    return queries
+
+
+def _parse_mongodb_queries(
+    parser: argparse.ArgumentParser, entries: list[str]
+) -> list[tuple[str, str]]:
+    queries: list[tuple[str, str]] = []
+    for entry in entries:
+        environment, separator, target = entry.partition("=")
+        database, dot, collection = target.partition(".")
+        if (
+            not separator
+            or not environment.strip()
+            or not dot
+            or not database.strip()
+            or not collection.strip()
+        ):
+            _die(
+                parser,
+                f"--mongodb-query expects ENV_VAR=DATABASE.COLLECTION, got {entry!r}",
+            )
+        queries.append((environment.strip(), target.strip()))
     return queries
 
 
@@ -232,6 +258,22 @@ def _add_contract_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_schema_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--schema-version",
+        choices=["1", "2"],
+        default="1",
+        help=(
+            "manifest schema to emit; 2 adds per-case timeoutSeconds and stays "
+            "readable by every verifier that reads v1"
+        ),
+    )
+
+
+def _manifest_schema(version: str) -> str:
+    return MANIFEST_SCHEMA_V2 if version == "2" else MANIFEST_SCHEMA
+
+
 def _add_scan_options(parser: argparse.ArgumentParser, *, required_out: bool) -> None:
     parser.add_argument(
         "--observer-root", required=True, help="sandbox directory to observe"
@@ -260,6 +302,7 @@ def build_parser(prog: str = "safesink") -> argparse.ArgumentParser:
     check.add_argument("--junit", help="JUnit XML path")
     check.add_argument("--sarif", help="SARIF path")
     check.add_argument("--manifest-out", help="also keep the generated manifest here")
+    _add_schema_option(check)
     check.add_argument(
         "--include-destructive",
         action="store_true",
@@ -310,6 +353,16 @@ def build_parser(prog: str = "safesink") -> argparse.ArgumentParser:
         default=[],
         metavar="ENV_VAR=SQL",
         help="observe a MySQL query; ENV_VAR names the variable holding the DSN (repeatable)",
+    )
+    check.add_argument(
+        "--mongodb-query",
+        action="append",
+        default=[],
+        metavar="ENV_VAR=DATABASE.COLLECTION",
+        help=(
+            "observe the documents a MongoDB collection returns; ENV_VAR names the "
+            "variable holding the URI, which never enters the manifest (repeatable)"
+        ),
     )
     check.add_argument(
         "--allow-unobserved-mutations",
@@ -425,6 +478,7 @@ def build_parser(prog: str = "safesink") -> argparse.ArgumentParser:
     )
     init.add_argument("--protocol-version", default="auto")
     init.add_argument("--startup-timeout", type=float, default=60.0)
+    _add_schema_option(init)
 
     badge = commands.add_parser(
         "badge", help="render a Shields-style SVG badge from a report"
@@ -448,6 +502,22 @@ def build_parser(prog: str = "safesink") -> argparse.ArgumentParser:
         "--keygen", action="store_true", help="print a new keypair and exit"
     )
 
+    compare = commands.add_parser(
+        "compare",
+        help="diff two reports, e.g. two pinned versions of one server",
+    )
+    compare.add_argument("left", help="earlier JSON report")
+    compare.add_argument("right", help="later JSON report")
+    compare.add_argument("--json", action="store_true", dest="as_json", help="print JSON")
+    compare.add_argument(
+        "--markdown", help="write a Markdown diff for a review comment"
+    )
+    compare.add_argument(
+        "--max-score-drop",
+        type=int,
+        help="exit 2 when the score falls by more than this many points",
+    )
+
     verify_cert = commands.add_parser(
         "verify-cert", help="verify a certificate against its report"
     )
@@ -463,7 +533,9 @@ def build_parser(prog: str = "safesink") -> argparse.ArgumentParser:
     mcp = commands.add_parser(
         "mcp-verify", help="verify MCP tool annotations against observed effects"
     )
-    mcp.add_argument("manifest", help="path to an effectfence.mcp.v1 manifest")
+    mcp.add_argument(
+        "manifest", help="path to an effectfence.mcp.v1 or effectfence.mcp.v2 manifest"
+    )
     mcp.add_argument(
         "--out", default="safesink-mcp-report.json", help="JSON report path"
     )
@@ -519,6 +591,7 @@ def build_parser(prog: str = "safesink") -> argparse.ArgumentParser:
     )
     scan.add_argument("--protocol-version", default="auto")
     scan.add_argument("--startup-timeout", type=float, default=60.0)
+    _add_schema_option(scan)
     scan.add_argument(
         "command",
         nargs="+",
@@ -781,6 +854,24 @@ def _print_plan(plan: list[dict]) -> None:
         )
 
 
+def _print_comparison(comparison: dict) -> None:
+    left = comparison["left"]
+    right = comparison["right"]
+    print(
+        f"{left.get('server')} {left.get('version')} -> "
+        f"{right.get('server')} {right.get('version')}"
+    )
+    print(
+        f"verdict {left['verdict']} -> {right['verdict']}   "
+        f"score {left['score']} -> {right['score']}"
+    )
+    for entry in comparison["summary"]:
+        print(f"  {entry}")
+    if not comparison["summary"]:
+        print("  no change in findings, verdict or observed effects")
+    print(f"regression: {'yes' if comparison['regression'] else 'no'}")
+
+
 def _print_lint(result: dict) -> None:
     print(
         f"annotation score {result['score']['value']}/{result['score']['max']} "
@@ -792,6 +883,9 @@ def _print_lint(result: dict) -> None:
             f"  {finding['tool']}: {finding['code']} - {finding['message']}",
             file=sys.stderr,
         )
+        suggestion = finding.get("suggestion")
+        if suggestion:
+            print(f"    next: {suggestion}", file=sys.stderr)
     if not result["findings"]:
         print("  no annotation problems found", file=sys.stderr)
 
@@ -839,7 +933,10 @@ def main(argv: list[str] | None = None, prog: str = "safesink") -> int:
         sqlite_queries = _parse_sqlite_queries(parser, arguments.sqlite_query)
         postgres_queries = _parse_sqlite_queries(parser, arguments.pgsql_query)
         mysql_queries = _parse_sqlite_queries(parser, arguments.mysql_query)
-        database_observers = sqlite_queries or postgres_queries or mysql_queries
+        mongodb_queries = _parse_mongodb_queries(parser, arguments.mongodb_query)
+        database_observers = (
+            sqlite_queries or postgres_queries or mysql_queries or mongodb_queries
+        )
         contracts = _parse_contracts(parser, arguments.contract)
         contract_all = (
             _parse_hint_spec(parser, arguments.contract_all)
@@ -884,6 +981,7 @@ def main(argv: list[str] | None = None, prog: str = "safesink") -> int:
                     ]
                     + [f"${name} (postgres)" for name, _ in postgres_queries]
                     + [f"${name} (mysql)" for name, _ in mysql_queries]
+                    + [f"${name} (mongodb)" for name, _ in mongodb_queries]
                 )
                 _die(
                     parser,
@@ -917,6 +1015,8 @@ def main(argv: list[str] | None = None, prog: str = "safesink") -> int:
                 allowed_hosts=allowed_hosts,
                 postgres_queries=postgres_queries,
                 mysql_queries=mysql_queries,
+                mongodb_queries=mongodb_queries,
+                schema_version=_manifest_schema(arguments.schema_version),
             )
             write_manifest(manifest, manifest_path)
             if arguments.dry_run:
@@ -1018,6 +1118,7 @@ def main(argv: list[str] | None = None, prog: str = "safesink") -> int:
                 tools,
                 command=arguments.server,
                 observer_root=str(observer_root),
+                schema_version=_manifest_schema(arguments.schema_version),
                 cwd=arguments.cwd,
                 include_destructive=arguments.include_destructive,
                 inherit_env=arguments.inherit_env,
@@ -1153,6 +1254,41 @@ def main(argv: list[str] | None = None, prog: str = "safesink") -> int:
             print(f"{state}: {result['reason']}")
         return 0 if result["valid"] else 2
 
+    if arguments.cmd == "compare":
+        try:
+            left_report = load_report(arguments.left)
+            right_report = load_report(arguments.right)
+        except CompareError as error:
+            _die(parser, str(error), hint="pass two safesink mcp-verify JSON reports")
+            return 2
+        comparison = compare_reports(
+            left_report,
+            right_report,
+            left_path=arguments.left,
+            right_path=arguments.right,
+        )
+        if arguments.markdown:
+            target = Path(arguments.markdown)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                render_compare_markdown(comparison) + "\n", encoding="utf-8"
+            )
+        if arguments.as_json:
+            print(json.dumps(comparison, indent=2, sort_keys=True))
+        else:
+            _print_comparison(comparison)
+        if comparison["regression"]:
+            return 2
+        delta = comparison["score"]["delta"]
+        limit = arguments.max_score_drop
+        if limit is not None and isinstance(delta, int) and delta < 0 and -delta > limit:
+            print(
+                f"safesink: score fell by {-delta}, more than --max-score-drop {limit}",
+                file=sys.stderr,
+            )
+            return 2
+        return 0
+
     if arguments.cmd == "lint":
         if arguments.manifest:
             try:
@@ -1271,6 +1407,7 @@ def main(argv: list[str] | None = None, prog: str = "safesink") -> int:
             tools,
             command=arguments.command,
             observer_root=str(observer_root),
+            schema_version=_manifest_schema(arguments.schema_version),
             cwd=arguments.cwd,
             include_destructive=arguments.include_destructive,
             setup_command=arguments.setup_command,

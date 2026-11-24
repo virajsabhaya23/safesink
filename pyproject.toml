@@ -28,6 +28,7 @@ classifiers = [
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.3.9,<4"]
 mysql = ["pymysql>=1.1,<2"]
+mongodb = ["pymongo>=4.6,<5"]
 live-kafka-postgres = [
     "confluent-kafka>=2.15.0,<3",
     "psycopg[binary]>=3.3.9,<4",

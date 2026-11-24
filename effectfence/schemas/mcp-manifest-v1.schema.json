@@ -396,6 +396,69 @@
           "required": [
             "id",
             "kind",
+            "uriFromEnv",
+            "database",
+            "collection"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "const": "mongodb-query"
+            },
+            "uriFromEnv": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Name of the environment variable holding the connection URI; never a literal URI."
+            },
+            "database": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collection": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filter": {
+              "type": "object"
+            },
+            "projection": {
+              "type": "object"
+            },
+            "sort": {
+              "type": "object",
+              "additionalProperties": {
+                "enum": [1, -1]
+              }
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "world": {
+              "enum": [
+                "closed",
+                "open"
+              ]
+            },
+            "sensitive": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
             "dsnFromEnv",
             "query"
           ],

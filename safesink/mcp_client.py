@@ -384,8 +384,18 @@ class McpStdioClient:
             cursor = next_cursor
         raise McpClientError(f"tools/list exceeded maxPages={max_pages}")
 
-    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        result = self.request("tools/call", {"name": name, "arguments": arguments})
+    def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        result = self.request(
+            "tools/call",
+            {"name": name, "arguments": arguments},
+            timeout_seconds=timeout_seconds,
+        )
         if not isinstance(result, dict):
             raise McpClientError("tools/call result must be an object")
         return result

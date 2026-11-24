@@ -6,7 +6,7 @@ branding:
   color: blue
 inputs:
   manifest:
-    description: Path to a safesink.mcp.v1 (or legacy effectfence.mcp.v1) manifest
+    description: Path to an effectfence.mcp.v1 or effectfence.mcp.v2 manifest
     required: false
     default: safesink.mcp.json
   command:

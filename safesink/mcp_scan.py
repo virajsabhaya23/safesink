@@ -468,6 +468,8 @@ def build_manifest(
     allowed_hosts: tuple[str, ...] | None = None,
     postgres_queries: list[tuple[str, str]] | None = None,
     mysql_queries: list[tuple[str, str]] | None = None,
+    mongodb_queries: list[tuple[str, str]] | None = None,
+    schema_version: str = "effectfence.mcp.v1",
 ) -> dict[str, Any]:
     """Turn advertised tools into a manifest, skipping tools we must not auto-call.
 
@@ -483,7 +485,8 @@ def build_manifest(
     database_queries = list(sqlite_queries or [])
     postgres = list(postgres_queries or [])
     mysql = list(mysql_queries or [])
-    if include_sandbox_observer or not (database_queries or postgres or mysql):
+    mongodb = list(mongodb_queries or [])
+    if include_sandbox_observer or not (database_queries or postgres or mysql or mongodb):
         observers.append(
             {"id": "sandbox", "kind": "filesystem", "root": observer_root, "sensitive": False}
         )
@@ -520,6 +523,26 @@ def build_manifest(
                     "sensitive": False,
                 }
             )
+    for environment_variable, target in mongodb:
+        database, separator, collection = target.partition(".")
+        if not separator or not database.strip() or not collection.strip():
+            raise ScanError(
+                "--mongodb-query expects ENV_VAR=DATABASE.COLLECTION, "
+                f"got {environment_variable}={target!r}"
+            )
+        observers.append(
+            {
+                "id": _unique_observer_id(
+                    f"mongodb-{database.strip()}-{collection.strip()}",
+                    used_observer_ids,
+                ),
+                "kind": "mongodb-query",
+                "uriFromEnv": environment_variable,
+                "database": database.strip(),
+                "collection": collection.strip(),
+                "sensitive": False,
+            }
+        )
     cases: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
     used_ids: set[str] = set()
@@ -617,7 +640,7 @@ def build_manifest(
     if dry_run:
         generated["plan"] = plan_manifest(tools, cases, observers)
     return {
-        "schemaVersion": "effectfence.mcp.v1",
+        "schemaVersion": schema_version,
         "server": server,
         "observers": observers,
         "cases": cases,
@@ -659,6 +682,7 @@ def scaffold_manifest(
     inherit_env: list[str] | None = None,
     env: dict[str, str] | None = None,
     protocol_version: str = "auto",
+    schema_version: str = "effectfence.mcp.v1",
 ) -> dict[str, Any]:
     """A hand-editable starting point, not a machine-generated verdict.
 
@@ -675,6 +699,7 @@ def scaffold_manifest(
         inherit_env=inherit_env,
         env=env,
         protocol_version=protocol_version,
+        schema_version=schema_version,
     )
     todo: list[dict[str, str]] = []
     for tool in tools:

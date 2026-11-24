@@ -287,17 +287,102 @@ class SqliteQueryObserver:
 
 def _rows_delta(observer: Any, before: Snapshot, after: Snapshot) -> Delta:
     """Compare two row snapshots as multisets, shared by every SQL observer."""
+    return _multiset_delta(observer, before, after, "rows")
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _document_identity(document: Any) -> str | None:
+    """The canonical ``_id`` of a document, or None when it was not projected."""
+    if isinstance(document, dict) and "_id" in document:
+        return _canonical_json(document["_id"])
+    return None
+
+
+def _document_label(document: dict[str, Any]) -> str:
+    """A readable report path for a document, derived from its ``_id``."""
+    identity = document.get("_id")
+    if isinstance(identity, dict) and set(identity) == {"$type", "$value"}:
+        return f"{identity['$type']}({identity['$value']})"
+    return _canonical_json(identity)
+
+
+def _documents_delta(observer: Any, before: Snapshot, after: Snapshot) -> Delta:
+    """Compare documents by ``_id`` so an update is not mistaken for a removal.
+
+    A document keeps its ``_id`` across an update, but the shared multiset diff
+    sees the edited document as one document removed and another added, so every
+    in-place update would be called destructive. Identity matching keeps insert,
+    update and delete distinct. When a projection drops ``_id`` the snapshot has
+    no identity to match, so that comparison falls back to whole documents: an
+    edit there is indistinguishable from a removal, and is reported as one.
+    """
+    before_documents = before.state["documents"]
+    after_documents = after.state["documents"]
+    if any(
+        _document_identity(document) is None
+        for document in (*before_documents, *after_documents)
+    ):
+        return _multiset_delta(observer, before, after, "documents")
+
+    def grouped(
+        documents: list[dict[str, Any]],
+    ) -> tuple[dict[str, dict[str, int]], dict[str, str]]:
+        groups: dict[str, dict[str, int]] = {}
+        labels: dict[str, str] = {}
+        for document in documents:
+            identity = _document_identity(document)
+            assert identity is not None  # guarded by the check above
+            bucket = groups.setdefault(identity, {})
+            content = _canonical_json(document)
+            bucket[content] = bucket.get(content, 0) + 1
+            labels[identity] = _document_label(document)
+        return groups, labels
+
+    before_groups, labels = grouped(before_documents)
+    after_groups, after_labels = grouped(after_documents)
+    labels.update(after_labels)
+    created = tuple(sorted(labels[key] for key in set(after_groups) - set(before_groups)))
+    deleted = tuple(sorted(labels[key] for key in set(before_groups) - set(after_groups)))
+    modified = tuple(
+        sorted(
+            labels[key]
+            for key in set(before_groups) & set(after_groups)
+            if before_groups[key] != after_groups[key]
+        )
+    )
+    return Delta(
+        observer_id=observer.observer_id,
+        kind=observer.kind,
+        world=observer.world,
+        changed=before.digest != after.digest,
+        destructive=bool(deleted),
+        created=created,
+        modified=modified,
+        deleted=deleted,
+        before_digest=before.digest,
+        after_digest=after.digest,
+        sensitive=observer.sensitive,
+    )
+
+
+def _multiset_delta(
+    observer: Any, before: Snapshot, after: Snapshot, key_name: str
+) -> Delta:
+    """Compare two element snapshots as multisets, for SQL rows."""
     before_multiset: dict[str, int] = {}
     after_multiset: dict[str, int] = {}
-    for row in before.state["rows"]:
+    for row in before.state[key_name]:
         key = json.dumps(row, sort_keys=True, separators=(",", ":"))
         before_multiset[key] = before_multiset.get(key, 0) + 1
-    for row in after.state["rows"]:
+    for row in after.state[key_name]:
         key = json.dumps(row, sort_keys=True, separators=(",", ":"))
         after_multiset[key] = after_multiset.get(key, 0) + 1
-    # A row that disappeared is destructive; an insert is a change but not a
-    # removal, and a query that does not select it stays invisible.
-    removed_row = any(
+    # An element that disappeared is destructive; an insert is a change but not
+    # a removal, and a query that does not select it stays invisible.
+    removed = any(
         after_multiset.get(key, 0) < count for key, count in before_multiset.items()
     )
     return Delta(
@@ -305,7 +390,7 @@ def _rows_delta(observer: Any, before: Snapshot, after: Snapshot) -> Delta:
         kind=observer.kind,
         world=observer.world,
         changed=before.digest != after.digest,
-        destructive=removed_row,
+        destructive=removed,
         before_digest=before.digest,
         after_digest=after.digest,
         sensitive=observer.sensitive,
@@ -437,6 +522,166 @@ class MySqlQueryObserver(PostgresQueryObserver):
         finally:
             connection.close()
         return _row_snapshot(self, columns, rows)
+
+
+_MONGO_JS_OPERATORS = {"$where", "$function", "$accumulator"}
+
+
+def _mongo_js_keys(value: Any) -> set[str]:
+    """Server-side JavaScript operators anywhere in a filter or projection."""
+    keys: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str) and key in _MONGO_JS_OPERATORS:
+                keys.add(key)
+            keys |= _mongo_js_keys(item)
+    elif isinstance(value, list):
+        for item in value:
+            keys |= _mongo_js_keys(item)
+    return keys
+
+
+def _mongo_value(value: Any) -> Any:
+    """A JSON-comparable document value for every BSON type a driver returns."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, bytes):
+        return {"$bytes_base64": base64.b64encode(value).decode()}
+    if isinstance(value, dict):
+        return {str(key): _mongo_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_mongo_value(item) for item in value]
+    # ObjectId, datetime, Decimal128, Binary and friends differ only by their
+    # printable value for this purpose, and the type keeps two equal-looking
+    # values of different types distinguishable.
+    return {"$type": type(value).__name__, "$value": str(value)}
+
+
+def _mongo_document(document: dict[str, Any]) -> dict[str, Any]:
+    normalized = _mongo_value(document)
+    return normalized if isinstance(normalized, dict) else {"$value": normalized}
+
+
+class MongoQueryObserver:
+    """A read-only document snapshot over an optional pymongo driver.
+
+    The connection URI is read from an environment variable named by
+    ``uri_from_env``: it usually carries a password, so it must never live in a
+    manifest or a report. A snapshot is one ``find`` bounded by ``limit``; the
+    observer never writes, and server-side JavaScript (``$where``,
+    ``$function``) is refused so a filter cannot run code on the database it is
+    measuring.
+    """
+
+    kind = "mongodb-query"
+
+    def __init__(
+        self,
+        observer_id: str,
+        uri_from_env: str,
+        database: str,
+        collection: str,
+        *,
+        filter: dict[str, Any] | None = None,
+        projection: dict[str, Any] | None = None,
+        sort: dict[str, int] | None = None,
+        limit: int = 1000,
+        timeout_ms: int = 5000,
+        world: str = "closed",
+        sensitive: bool = True,
+    ):
+        if not uri_from_env:
+            raise ObserverError("mongodb observer requires uriFromEnv")
+        if not database or not collection:
+            raise ObserverError("mongodb observer requires database and collection")
+        if not isinstance(limit, int) or not 1 <= limit <= 100_000:
+            raise ObserverError("mongodb observer limit must be between 1 and 100000")
+        if timeout_ms <= 0:
+            raise ObserverError("mongodb server selection timeout must be positive")
+        if filter is not None and not isinstance(filter, dict):
+            raise ObserverError("mongodb observer filter must be an object")
+        forbidden = sorted(_mongo_js_keys(filter or {}) | _mongo_js_keys(projection or {}))
+        if forbidden:
+            raise ObserverError(
+                "mongodb observer refuses server-side JavaScript operators: "
+                + ", ".join(forbidden)
+            )
+        if projection is not None and not isinstance(projection, dict):
+            raise ObserverError("mongodb observer projection must be an object")
+        if sort is not None and (
+            not isinstance(sort, dict)
+            or any(value not in {1, -1} for value in sort.values())
+        ):
+            raise ObserverError("mongodb observer sort must map fields to 1 or -1")
+        self.observer_id = observer_id
+        self.uri_from_env = uri_from_env
+        self.database = database
+        self.collection = collection
+        self.filter = filter
+        self.projection = projection
+        self.sort = sort
+        self.limit = limit
+        self.timeout_ms = timeout_ms
+        self.world = world
+        self.sensitive = sensitive
+
+    def _uri(self) -> str:
+        uri = os.environ.get(self.uri_from_env)
+        if not uri:
+            raise ObserverError(
+                f"mongodb observer requires environment variable {self.uri_from_env!r}"
+            )
+        return uri
+
+    def snapshot(self) -> Snapshot:
+        try:
+            import pymongo  # type: ignore[import-not-found]
+        except ImportError as error:
+            raise ObserverError(
+                "the mongodb observer needs pymongo: pip install 'safesink[mongodb]'"
+            ) from error
+        try:
+            client = pymongo.MongoClient(
+                self._uri(), serverSelectionTimeoutMS=int(self.timeout_ms)
+            )
+        except Exception as error:  # driver errors are not our vocabulary
+            raise ObserverError(
+                f"mongodb observer {self.observer_id!r} could not connect "
+                f"({error.__class__.__name__}; details omitted)"
+            ) from error
+        try:
+            cursor = client[self.database][self.collection].find(
+                self.filter or {}, self.projection, limit=self.limit
+            )
+            if self.sort:
+                cursor = cursor.sort(list(self.sort.items()))
+            documents = [_mongo_document(document) for document in cursor]
+        except Exception as error:
+            raise ObserverError(
+                f"mongodb observer {self.observer_id!r} read failed "
+                f"({error.__class__.__name__}; details omitted)"
+            ) from error
+        finally:
+            client.close()
+        # Server order is not part of the measured state, so the digest is over
+        # a sorted multiset of documents.
+        documents.sort(key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
+        state = {
+            "database": self.database,
+            "collection": self.collection,
+            "documents": documents,
+        }
+        return Snapshot(
+            self.observer_id,
+            self.kind,
+            canonical_digest(state),
+            state,
+            self.world,
+            self.sensitive,
+        )
+
+    def diff(self, before: Snapshot, after: Snapshot) -> Delta:
+        return _documents_delta(self, before, after)
 
 
 def _row_snapshot(observer: Any, columns: list[str], rows: list[list[Any]]) -> Snapshot:

@@ -90,11 +90,11 @@ class DeprecatedAliasTests(unittest.TestCase):
 
     def test_versions_and_schema_copies_agree(self) -> None:
         self.assertEqual(effectfence.__version__, safesink.__version__)
-        schema = "mcp-manifest-v1.schema.json"
-        self.assertEqual(
-            (ROOT / "safesink" / "schemas" / schema).read_bytes(),
-            (ROOT / "effectfence" / "schemas" / schema).read_bytes(),
-        )
+        for schema in ("mcp-manifest-v1.schema.json", "mcp-manifest-v2.schema.json"):
+            self.assertEqual(
+                (ROOT / "safesink" / "schemas" / schema).read_bytes(),
+                (ROOT / "effectfence" / "schemas" / schema).read_bytes(),
+            )
 
     def test_version_flag_reports_the_invoked_program(self) -> None:
         for main, prog in ((safesink_main, "safesink"), (effectfence_main, "effectfence")):

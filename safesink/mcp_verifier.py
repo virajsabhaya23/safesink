@@ -16,6 +16,7 @@ from .observers import (
     Delta,
     FilesystemObserver,
     HttpJsonObserver,
+    MongoQueryObserver,
     MySqlQueryObserver,
     Observer,
     ObserverError,
@@ -28,6 +29,8 @@ from .observers import (
 
 REPORT_SCHEMA = "effectfence.mcp.report.v1"
 MANIFEST_SCHEMA = "effectfence.mcp.v1"
+MANIFEST_SCHEMA_V2 = "effectfence.mcp.v2"
+SUPPORTED_MANIFEST_SCHEMAS = (MANIFEST_SCHEMA, MANIFEST_SCHEMA_V2)
 
 # The score is part of the contract: badges, leaderboards and agent gates all
 # consume one number, so the weights are named here and the formula is versioned.
@@ -345,7 +348,6 @@ def _score(
             "inconclusiveCases": inconclusive,
             "coverageRatio": round(coverage_ratio, 6),
             "requiredCoverage": required_coverage,
-            "requiredCoverage": required_coverage,
             "fatalError": fatal_error is not None,
         },
     }
@@ -594,12 +596,23 @@ def _limitations(observers: list[dict[str, Any]]) -> list[str]:
             "A SQLite observer compares only the rows its query returns; writes "
             "outside that result set are not observed."
         )
+    if "mongodb-query" in kinds:
+        limitations.append(
+            "A MongoDB observer compares only the documents its filter and "
+            "projection return, so writes outside that set are not observed."
+        )
     if "filesystem" not in kinds:
         limitations.append(
             "No filesystem observer was configured, so file writes are outside "
             "the observed boundary."
         )
     return limitations
+
+
+def _case_timeout(case: dict[str, Any]) -> float | None:
+    """A per-call timeout declared by a v2 case, if any."""
+    value = case.get("timeoutSeconds")
+    return float(value) if value is not None else None
 
 
 def _run_case(
@@ -626,6 +639,9 @@ def _run_case(
         "violations": [],
         "inconclusive": [],
     }
+    timeout = _case_timeout(case)
+    if timeout is not None:
+        public["timeoutSeconds"] = timeout
     if tool is None:
         public["violations"].append(
             {"code": "TOOL_NOT_LISTED", "message": "tool was not returned by tools/list"}
@@ -686,7 +702,9 @@ def _run_case(
                     ),
                 }
             )
-        first_result = client.call_tool(case["tool"], arguments)
+        first_result = client.call_tool(
+            case["tool"], arguments, timeout_seconds=timeout
+        )
         after_first = _snapshot_all(selected)
         first_delta = _diff_all(selected, before, after_first)
         public["calls"].append(_public_call(first_result, 1))
@@ -731,7 +749,9 @@ def _run_case(
 
         retry_enabled = bool(case.get("retry", declarations.get("idempotentHint") is True))
         if retry_enabled:
-            second_result = client.call_tool(case["tool"], arguments)
+            second_result = client.call_tool(
+                case["tool"], arguments, timeout_seconds=timeout
+            )
             after_second = _snapshot_all(selected)
             retry_delta = _diff_all(selected, after_first, after_second)
             public["calls"].append(_public_call(second_result, 2))
@@ -816,6 +836,9 @@ def _run_ambiguous_result_case(
 ) -> dict[str, Any]:
     fault = case["ambiguousResultFault"]
     mode = fault["mode"]
+    timeout = _case_timeout(case)
+    if timeout is not None:
+        public["timeoutSeconds"] = timeout
     trials: list[dict[str, Any]] = []
     classifications: dict[str, int] = {}
     interfering_trials: list[int] = []
@@ -830,7 +853,9 @@ def _run_ambiguous_result_case(
             first_delta: list[Delta] = []
             first_call: dict[str, Any]
             if mode == "drop-result-after-response":
-                first_result = client.call_tool(case["tool"], case.get("arguments", {}))
+                first_result = client.call_tool(
+                    case["tool"], case.get("arguments", {}), timeout_seconds=timeout
+                )
                 after_first = _snapshot_all(selected)
                 first_delta = _diff_all(selected, before, after_first)
                 first_call = {
@@ -853,7 +878,9 @@ def _run_ambiguous_result_case(
                     "structuredContentPresent": False,
                 }
 
-            retry_result = client.call_tool(case["tool"], case.get("arguments", {}))
+            retry_result = client.call_tool(
+                case["tool"], case.get("arguments", {}), timeout_seconds=timeout
+            )
             after_retry = _snapshot_all(selected)
             retry_delta = _diff_all(selected, after_first, after_retry)
             attributable_retry = [
@@ -1080,6 +1107,19 @@ def _build_observers(items: list[dict[str, Any]], base: Path) -> dict[str, Obser
                 tuple(item.get("parameters", [])),
                 **common,
             )
+        elif item["kind"] == "mongodb-query":
+            observer = MongoQueryObserver(
+                observer_id,
+                str(item["uriFromEnv"]),
+                str(item["database"]),
+                str(item["collection"]),
+                filter=item.get("filter"),
+                projection=item.get("projection"),
+                sort=item.get("sort"),
+                limit=int(item.get("limit", 1000)),
+                timeout_ms=int(item.get("timeoutMs", 5000)),
+                **common,
+            )
         elif item["kind"] in {"postgres-query", "mysql-query"}:
             observer_class = (
                 PostgresQueryObserver
@@ -1174,8 +1214,11 @@ def load_suppressions(path: str | Path) -> dict[str, Any]:
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> None:
-    if manifest.get("schemaVersion") != MANIFEST_SCHEMA:
-        raise ManifestError(f"schemaVersion must be {MANIFEST_SCHEMA!r}")
+    manifest_version = manifest.get("schemaVersion")
+    if manifest_version not in SUPPORTED_MANIFEST_SCHEMAS:
+        raise ManifestError(
+            f"schemaVersion must be {MANIFEST_SCHEMA!r} or {MANIFEST_SCHEMA_V2!r}"
+        )
     server = manifest.get("server")
     if not isinstance(server, dict):
         raise ManifestError("server must be an object")
@@ -1220,12 +1263,21 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
             "sqlite-query": "database",
             "postgres-query": "dsnFromEnv",
             "mysql-query": "dsnFromEnv",
+            "mongodb-query": "uriFromEnv",
             "http-json": "url",
         }
         if kind not in required:
             raise ManifestError(f"unsupported observer kind: {kind!r}")
         if required[kind] not in item:
             raise ManifestError(f"observer {observer_id!r} requires {required[kind]!r}")
+        if kind == "mongodb-query":
+            for key in ("database", "collection"):
+                if not isinstance(item.get(key), str) or not item[key]:
+                    raise ManifestError(f"observer {observer_id!r} requires {key!r}")
+            if not isinstance(item.get("uriFromEnv"), str) or not item["uriFromEnv"]:
+                raise ManifestError(
+                    f"observer {observer_id!r} requires uriFromEnv (never a literal URI)"
+                )
         if kind in {"sqlite-query", "postgres-query", "mysql-query"} and not isinstance(
             item.get("query"), str
         ):
@@ -1250,6 +1302,21 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         case_ids.add(case_id)
         if not isinstance(case.get("tool"), str) or not case["tool"]:
             raise ManifestError(f"case {case_id!r} requires a tool")
+        declared_timeout = case.get("timeoutSeconds")
+        if declared_timeout is not None:
+            if manifest_version != MANIFEST_SCHEMA_V2:
+                raise ManifestError(
+                    f"case {case_id!r} timeoutSeconds needs schemaVersion "
+                    f"{MANIFEST_SCHEMA_V2!r}; v1 manifests stay valid unchanged"
+                )
+            if (
+                not isinstance(declared_timeout, (int, float))
+                or isinstance(declared_timeout, bool)
+                or declared_timeout <= 0
+            ):
+                raise ManifestError(
+                    f"case {case_id!r} timeoutSeconds must be a positive number"
+                )
         if not isinstance(case.get("arguments", {}), dict):
             raise ManifestError(f"case {case_id!r} arguments must be an object")
         selected = case.get("observerIds", list(observer_ids))

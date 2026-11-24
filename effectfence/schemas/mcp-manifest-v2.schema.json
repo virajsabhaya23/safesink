@@ -1,0 +1,563 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/virajsabhaya23/safesink/schemas/mcp-manifest-v2.schema.json",
+  "title": "EffectFence MCP conformance manifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "server",
+    "observers",
+    "cases"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "effectfence.mcp.v2"
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "transport": {
+          "enum": [
+            "stdio",
+            "streamable-http"
+          ]
+        },
+        "command": {
+          "$ref": "#/$defs/command"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "env": {
+          "$ref": "#/$defs/stringMap"
+        },
+        "inheritEnv": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "protocolVersion": {
+          "type": "string",
+          "description": "Protocol revision to speak, or auto to probe server/discover and fall back to the 2025-11-25 handshake.",
+          "examples": [
+            "auto",
+            "2026-07-28",
+            "2025-11-25"
+          ]
+        },
+        "requestTimeoutSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "startupTimeoutSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "maxMessageBytes": {
+          "type": "integer",
+          "minimum": 1024
+        },
+        "maxListPages": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "captureStderr": {
+          "type": "boolean"
+        },
+        "restartPerCase": {
+          "type": "boolean",
+          "description": "Restart the server between cases so no state carries over."
+        },
+        "caseOrder": {
+          "enum": [
+            "file",
+            "name",
+            "manifest"
+          ],
+          "description": "Case execution order: as written, alphabetical, or manifest.caseOrder."
+        },
+        "url": {
+          "type": "string",
+          "description": "Streamable-HTTP MCP endpoint."
+        },
+        "headersFromEnv": {
+          "$ref": "#/$defs/stringMap"
+        },
+        "allowedHosts": {
+          "$ref": "#/$defs/stringArray"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "command"
+          ]
+        },
+        {
+          "required": [
+            "url"
+          ]
+        }
+      ]
+    },
+    "observers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/observer"
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimumToolCoverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "runTimeoutSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Run-level budget; cases not reached are reported as RUN_BUDGET_EXHAUSTED."
+        }
+      }
+    },
+    "caseOrder": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Explicit case order used when server.caseOrder is 'manifest'."
+    }
+  },
+  "$defs": {
+    "command": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "stringArray": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "hook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/command"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "env": {
+          "$ref": "#/$defs/stringMap"
+        },
+        "timeoutSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "readOnlyHint": {
+          "type": "boolean"
+        },
+        "destructiveHint": {
+          "type": "boolean"
+        },
+        "idempotentHint": {
+          "type": "boolean"
+        },
+        "openWorldHint": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ambiguousResultFault": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "drop-result-after-response",
+            "timeout-before-send"
+          ]
+        },
+        "trials": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "observer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "root"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "const": "filesystem"
+            },
+            "root": {
+              "type": "string"
+            },
+            "exclude": {
+              "$ref": "#/$defs/stringArray"
+            },
+            "maxFiles": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxEntries": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxTotalBytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "world": {
+              "enum": [
+                "closed",
+                "open"
+              ]
+            },
+            "sensitive": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "database",
+            "query"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "const": "sqlite-query"
+            },
+            "database": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "parameters": {
+              "type": "array"
+            },
+            "world": {
+              "enum": [
+                "closed",
+                "open"
+              ]
+            },
+            "sensitive": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "url"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "const": "http-json"
+            },
+            "url": {
+              "type": "string"
+            },
+            "allowedHosts": {
+              "$ref": "#/$defs/stringArray"
+            },
+            "headersFromEnv": {
+              "$ref": "#/$defs/stringMap"
+            },
+            "timeoutSeconds": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "maxResponseBytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "world": {
+              "enum": [
+                "closed",
+                "open"
+              ]
+            },
+            "sensitive": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "dsnFromEnv",
+            "query"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "const": "postgres-query"
+            },
+            "dsnFromEnv": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Name of the environment variable holding the DSN; never a literal DSN."
+            },
+            "query": {
+              "type": "string"
+            },
+            "parameters": {
+              "type": "array"
+            },
+            "statementTimeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "world": {
+              "enum": [
+                "closed",
+                "open"
+              ]
+            },
+            "sensitive": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "uriFromEnv",
+            "database",
+            "collection"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "const": "mongodb-query"
+            },
+            "uriFromEnv": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Name of the environment variable holding the connection URI; never a literal URI."
+            },
+            "database": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collection": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filter": {
+              "type": "object"
+            },
+            "projection": {
+              "type": "object"
+            },
+            "sort": {
+              "type": "object",
+              "additionalProperties": {
+                "enum": [
+                  1,
+                  -1
+                ]
+              }
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "world": {
+              "enum": [
+                "closed",
+                "open"
+              ]
+            },
+            "sensitive": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "dsnFromEnv",
+            "query"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "const": "mysql-query"
+            },
+            "dsnFromEnv": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Name of the environment variable holding the DSN; never a literal DSN."
+            },
+            "query": {
+              "type": "string"
+            },
+            "parameters": {
+              "type": "array"
+            },
+            "statementTimeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "world": {
+              "enum": [
+                "closed",
+                "open"
+              ]
+            },
+            "sensitive": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "tool"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "observerIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "observerControlRounds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 1,
+          "description": "Matched no-tool observation rounds executed before the tool call. 0 disables the non-interference control and forfeits causal attribution evidence."
+        },
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "retry": {
+          "type": "boolean"
+        },
+        "expectToolError": {
+          "type": "boolean"
+        },
+        "ambiguousResultFault": {
+          "$ref": "#/$defs/ambiguousResultFault"
+        },
+        "setup": {
+          "$ref": "#/$defs/hook"
+        },
+        "cleanup": {
+          "$ref": "#/$defs/hook"
+        },
+        "timeoutSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Per-call timeout for this case's tools/call requests; v2 only, so v1 manifests stay valid unchanged."
+        }
+      }
+    }
+  }
+}

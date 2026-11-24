@@ -393,6 +393,114 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_compare_markdown(comparison: dict[str, Any]) -> str:
+    """A reviewable diff of two reports, usually two pinned server versions."""
+    left = comparison.get("left") or {}
+    right = comparison.get("right") or {}
+    verdict = comparison.get("verdict") or {}
+    score = comparison.get("score") or {}
+    regression = bool(comparison.get("regression"))
+    lines = [
+        f"## SafeSink version comparison: {'❌ REGRESSION' if regression else '✅ NO REGRESSION'}",
+        "",
+        "**Before:** {} {} - verdict `{}`, score {} ({}) ".format(
+            _cell(left.get("server")),
+            _cell(left.get("version")),
+            _cell(left.get("verdict")),
+            _cell(left.get("score")),
+            _cell(left.get("path")),
+        ).strip(),
+        "**After:** {} {} - verdict `{}`, score {} ({}) ".format(
+            _cell(right.get("server")),
+            _cell(right.get("version")),
+            _cell(right.get("verdict")),
+            _cell(right.get("score")),
+            _cell(right.get("path")),
+        ).strip(),
+        "",
+        "**Verdict:** `{}` -> `{}` · **Score:** {} -> {} ({:+d})".format(
+            _cell(verdict.get("left")),
+            _cell(verdict.get("right")),
+            _cell(score.get("left")),
+            _cell(score.get("right")),
+            score.get("delta") if isinstance(score.get("delta"), int) else 0,
+        ),
+        "",
+    ]
+    findings = comparison.get("findings") or {}
+    added = findings.get("added") or []
+    removed = findings.get("removed") or []
+    if added:
+        lines.extend(["### New findings", "", "| Case | Tool | Code |", "| --- | --- | --- |"])
+        for item in added:
+            lines.append(
+                "| {} | {} | `{}` |".format(
+                    _cell(item.get("caseId")),
+                    _cell(item.get("tool")),
+                    _cell(item.get("code")),
+                )
+            )
+        lines.append("")
+    if removed:
+        lines.extend(["### Findings no longer reported", "", "| Case | Tool | Code |", "| --- | --- | --- |"])
+        for item in removed:
+            lines.append(
+                "| {} | {} | `{}` |".format(
+                    _cell(item.get("caseId")),
+                    _cell(item.get("tool")),
+                    _cell(item.get("code")),
+                )
+            )
+        lines.append("")
+    effects = comparison.get("effects") or []
+    if effects:
+        lines.extend(
+            [
+                "### Observed effect changed",
+                "",
+                "| Case | Observer | Call | Before | After |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for item in effects:
+            for change in item.get("observers", []):
+                lines.append(
+                    "| {} | {} | {} | {} | {} |".format(
+                        _cell(item.get("caseId")),
+                        _cell(change.get("observer")),
+                        _cell(change.get("call")),
+                        _cell(_effect_text(change.get("left"))),
+                        _cell(_effect_text(change.get("right"))),
+                    )
+                )
+        lines.append("")
+    summary = comparison.get("summary") or []
+    if summary:
+        lines.extend(["### Changes", ""])
+        lines.extend(f"- `{_cell(entry)}`" for entry in summary)
+        lines.append("")
+    else:
+        lines.extend(["No finding, verdict or observed effect changed.", ""])
+    lines.append(
+        "A diff is a comparison of two observed boundaries, not a certification of "
+        "either version."
+    )
+    return "\n".join(lines)
+
+
+def _effect_text(shape: Any) -> str:
+    if not isinstance(shape, dict):
+        return "no delta"
+    parts = [
+        f"changed={bool(shape.get('changed'))}",
+        f"destructive={bool(shape.get('destructive'))}",
+        f"created={shape.get('created', 0)}",
+        f"modified={shape.get('modified', 0)}",
+        f"deleted={shape.get('deleted', 0)}",
+    ]
+    return ", ".join(parts)
+
+
 def write_markdown_report(report: dict[str, Any], path: str | Path) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)

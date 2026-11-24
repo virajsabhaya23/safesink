@@ -69,6 +69,9 @@ class BuildBackendTests(unittest.TestCase):
                 self.assertIn(
                     "safesink/schemas/mcp-manifest-v1.schema.json", names
                 )
+                self.assertIn(
+                    "safesink/schemas/mcp-manifest-v2.schema.json", names
+                )
                 self.assertIn("safesink/legacy/simulator.py", names)
                 self.assertIn(f"{DIST}.dist-info/LICENSE", names)
                 metadata = archive.read(f"{DIST}.dist-info/METADATA")
@@ -77,6 +80,9 @@ class BuildBackendTests(unittest.TestCase):
                 # legacy shim still shipped
                 self.assertIn(
                     "effectfence/schemas/mcp-manifest-v1.schema.json", names
+                )
+                self.assertIn(
+                    "effectfence/schemas/mcp-manifest-v2.schema.json", names
                 )
 
     def test_sdist_contains_offline_build_backend(self) -> None:
