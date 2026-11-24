@@ -175,11 +175,7 @@ def compare_reports(
             "regressed": verdict_regressed,
         },
         "score": score,
-        "findings": {
-            "added": added,
-            "removed": removed,
-            "persisting": len(finding_keys & right_keys),
-        },
+        "findings": {"added": added, "removed": removed},
         "cases": {
             "added": added_cases,
             "removed": removed_cases,
