@@ -2,6 +2,60 @@
 
 All notable changes will be documented here. This project follows Semantic Versioning and the Keep a Changelog structure.
 
+## Unreleased
+
+### Added
+
+- Manifest schema `effectfence.mcp.v2`, identical to v1 plus `cases[].timeoutSeconds`
+  for a per-call timeout on one case (first call and retry). `--schema-version 2`
+  emits it from `mcp-scan`, `mcp-check` and `init`; v1 manifests stay valid
+  unchanged, and a v1 case that uses the v2 field is rejected with a clear
+  message instead of being ignored.
+- A `mongodb-query` observer: one bounded `find` over an optional `pymongo`
+  driver (`safesink[mongodb]`), with the URI read from an environment variable,
+  documents compared as a sorted multiset, and server-side JavaScript operators
+  refused. Configure it with `--mongodb-query ENV_VAR=DATABASE.COLLECTION` or
+  the manifest fields `uriFromEnv`, `database` and `collection`.
+- Pull-request reporting moved to a separate `workflow_run` workflow
+  (`pr-report.yml`). The workflow that executes the server under test now holds
+  only `contents: read`, so a fork pull request can never reach a writable token
+  while its code runs; the reporter downloads the evidence, neutralises
+  `@`-mentions in the report text and keeps one sticky comment.
+
+- Lint findings now carry a `suggestion`: the concrete next step for that tool,
+  such as the `--contract` form that fixes the declaration or the annotation to
+  change. `lint --json` reports it per finding, the terminal output prints it as
+  `next:`, and `mcp_lint.rule_catalog()` exposes the same advice for tooling.
+- `safesink compare BEFORE.json AFTER.json`: a version-to-version diff of two
+  conformance reports. It reports findings added and removed, case statuses that
+  changed, a changed observed boundary, and which observer saw a different
+  effect on the same case and call. Exit 2 marks a regression (a new finding, a
+  new policy violation, a new fatal error or a worse verdict); a score drop is
+  reported as `SCORE_DROPPED` and gates only with `--max-score-drop`. `--json`
+  prints the comparison and `--markdown` writes it for a review comment.
+- `safesink-mcp` serves `describe_rules` from the lint rule table itself, so the
+  documented codes, rationale and caveats cannot drift from the codes
+  `lint_manifest` emits.
+
+### Fixed
+
+- The `mongodb-query` observer compared documents as a multiset, so an in-place
+  update looked like one document deleted and a different one added: a tool
+  declaring `destructiveHint: false` was reported as removing state. Documents
+  are now matched by `_id`, an edit is a modification, and only a document that
+  disappears is destructive. A projection that drops `_id` still falls back to
+  whole-document comparison, because there is no identity to match.
+- The v2 manifest schema was a hand-maintained second copy of v1. It is now
+  generated from v1 by `derive_v2` in `scripts/schema_gen.py`, and the suite
+  fails if either shipped copy drifts from that output.
+- `describe_rules` documented seven rule codes (`MISSING_READONLY`,
+  `VOLATILE_ARGUMENT`, ...) that `lint_manifest` never emitted, so an agent
+  consuming the catalog could not map a finding to its explanation. The catalog
+  is now derived from `mcp_lint.RULES`.
+- `docs/LINT_RULES.md` listed `seed` as a volatile argument name; a
+  caller-supplied seed is the fix for an idempotency problem, not a cause, and
+  the rule never matched it.
+
 ## 0.6.0 - 2026-11-21
 
 ### Added

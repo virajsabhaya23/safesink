@@ -12,8 +12,8 @@ MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
 `openWorldHint`) are untrusted hints: nothing stops a server from declaring a
 tool read-only while it writes files, or idempotent while every retry charges the
 customer twice. SafeSink calls the tool, observes the state it actually changed
-inside an explicit filesystem, SQLite, or HTTP JSON boundary, and reports where
-the declaration and the observed effect disagree.
+inside an explicit filesystem, SQLite, PostgreSQL, MySQL, MongoDB or HTTP JSON
+boundary, and reports where the declaration and the observed effect disagree.
 
 One command, no manifest, no server changes:
 
@@ -207,6 +207,18 @@ safesink mcp-verify safesink.mcp.json --baseline baseline.json --new-only
 `--new-only` fails only on `(caseId, code)` pairs the baseline did not record.
 Every suppressed finding is still listed with its case and code, and the JUnit
 report counts them, so adoption never hides what was accepted.
+
+Upgrading a server? Diff two reports instead of re-reading both:
+
+```bash
+safesink compare out/v1.json out/v2.json --markdown out/diff.md
+```
+
+It reports findings added and removed, case statuses that changed, any change in
+the observed boundary, and which observed effect changed on a case (`modified=1`
+became `deleted=1`). Exit 2 means a regression: a new finding, a new policy
+violation, a new fatal error or a worse verdict. See
+[`docs/MCP_CONFORMANCE.md`](docs/MCP_CONFORMANCE.md#comparing-two-runs-across-versions).
 
 ## Accepted findings, with a reason and an expiry
 

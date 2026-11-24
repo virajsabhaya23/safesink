@@ -69,10 +69,15 @@ Shipped and documented:
 | --- | --- |
 | One-step discovery and verification (`mcp-check`, `mcp-verify`) | [`docs/MCP_CONFORMANCE.md`](MCP_CONFORMANCE.md) |
 | Reviewable scaffolding (`safesink init`) and declaration lint (`safesink lint`) | [`docs/LINT_RULES.md`](LINT_RULES.md) |
+| Agent-native advice: every lint finding carries a concrete next step, and `describe_rules` is generated from the rule table | [`docs/MCP_SERVER.md`](MCP_SERVER.md) |
 | CLI contracts for unannotated servers (`--contract`, `--contract-all`) | [`docs/MCP_CONFORMANCE.md`](MCP_CONFORMANCE.md) |
 | Observers: filesystem, SQLite, PostgreSQL, MySQL, HTTP JSON | [`docs/MCP_CONFORMANCE.md`](MCP_CONFORMANCE.md) |
 | Remote servers over streamable HTTP with a host allowlist | [`docs/MCP_CONFORMANCE.md`](MCP_CONFORMANCE.md) |
 | Baselines, reasoned suppressions with expiry, run budgets, per-case restart | [`docs/MCP_CONFORMANCE.md`](MCP_CONFORMANCE.md) |
+| A MongoDB observer, sharing the row-diff semantics of the SQL observers | [`docs/MCP_CONFORMANCE.md`](MCP_CONFORMANCE.md#mongodb) |
+| Manifest v2: per-case timeouts with a documented migration from v1 | [`docs/MCP_CONFORMANCE.md`](MCP_CONFORMANCE.md#manifest-v2-and-per-case-timeouts) |
+| Pull-request evidence for forks via a `workflow_run` reporter, with no writable token near the server under test | [`docs/GITHUB_ACTION.md`](GITHUB_ACTION.md#permissions-and-untrusted-forks) |
+| `safesink compare`: a version-to-version diff of findings, case statuses, the observed boundary and the effect each call had | [`docs/MCP_CONFORMANCE.md`](MCP_CONFORMANCE.md#comparing-two-runs-across-versions) |
 | Trust score, Markdown report, job summary, sticky PR comment, one-step Action | [`docs/GITHUB_ACTION.md`](GITHUB_ACTION.md) |
 | Signed, offline-verifiable certificates | [`docs/CERTIFICATES.md`](CERTIFICATES.md) |
 | `safesink-mcp`: lint inside an agent, execution opt-in | [`docs/MCP_SERVER.md`](MCP_SERVER.md) |
@@ -84,20 +89,12 @@ Shipped and documented:
 
 In rough order:
 
-1. **`pull_request_target`-safe reporting.** Post the sticky comment from a
-   separate workflow so fork PRs get a report without giving fork code a
-   writable token.
-2. **More observers.** Provider APIs (object storage, a hosted queue) and
-   MongoDB, each following the same rule as the SQL observers: credentials from
-   the environment only, read-only snapshots, optional driver.
-3. **Manifest schema v2.** A migration path for case-level contracts,
-   transport credentials by reference, and per-case timeouts without breaking
-   `safesink.mcp.v1` manifests.
-4. **Report comparison across versions.** `--baseline` compares verdicts; the
-   next step is a diff of *which* effect changed between two runs of two
-   versions.
-5. **Agent-native advice.** Have `lint_manifest` return a concrete contract
-   suggestion per finding, not only a code.
+1. **More observers.** Provider APIs (object storage, a hosted queue), each
+   following the same rule as the SQL observers: credentials from the
+   environment only, read-only snapshots, optional driver.
+2. **Further v2 fields.** Credential rotation by reference and a per-case
+   observer selection are the next candidates; each must keep v1 semantics
+   byte-identical, as `timeoutSeconds` did.
 
 ## Later
 

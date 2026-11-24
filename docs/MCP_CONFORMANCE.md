@@ -102,6 +102,40 @@ shell.
 own annotations or when an older server does not publish them. The report marks
 each declaration source as `mcp-tool-annotation` or `manifest-contract`.
 
+### Manifest v2 and per-case timeouts
+
+`schemaVersion: "effectfence.mcp.v1"` remains the default and remains valid.
+v2 is the same document with one addition: a case may set `timeoutSeconds`,
+which bounds each `tools/call` for that case (the first call and the retry)
+without changing the client-wide `server.requestTimeoutSeconds`.
+
+```json
+{
+  "schemaVersion": "effectfence.mcp.v2",
+  "cases": [
+    {"id": "slow-report", "tool": "build_report", "arguments": {}, "timeoutSeconds": 120}
+  ]
+}
+```
+
+A slow tool next to a fast one is the usual reason: a run-wide timeout is too
+coarse, and raising the client timeout for every call hides a hang elsewhere.
+The effective timeout is recorded on the case in the report. A case in a v1
+manifest may not use the field - the loader says so rather than silently
+ignoring it - so upgrading is an explicit edit of `schemaVersion`.
+
+Emit a v2 manifest with `--schema-version 2` on `mcp-scan`, `mcp-check` or
+`init`. The schema is
+[`safesink/schemas/mcp-manifest-v2.schema.json`](../safesink/schemas/mcp-manifest-v2.schema.json);
+both versions are accepted by every reviewer and verifier.
+
+The v2 file is not maintained by hand: `derive_v2` in
+[`scripts/schema_gen.py`](../scripts/schema_gen.py) adds the `$id`, `title`,
+`schemaVersion` value and `cases[].timeoutSeconds` to the v1 document, and
+`tests/test_manifest_schemas.py` fails if either shipped copy (in `safesink/`
+and `effectfence/`) differs from that output. After an intentional schema
+change, run `python3 scripts/schema_gen.py` and commit both copies.
+
 ## Checks
 
 | Declaration | Dynamic failure condition |
@@ -185,6 +219,14 @@ evidence is explicitly inconclusive and can never produce a passing verdict.
   SQLite's authorizer API, and compares the rows the query returns as a
   multiset. A removed row is reported as destructive; an insert, update or
   delete outside the result set is invisible to this observer.
+- `mongodb-query`: reads one bounded `find` over an optional `pymongo` driver and
+  compares the documents by their `_id`, so an in-place update is a modification
+  rather than a removal and only a document that disappears is destructive. A
+  projection that drops `_id` leaves no identity to match, so that snapshot
+  falls back to whole-document comparison and an edit there is reported as one
+  document removed and another added. The connection URI comes from an
+  environment variable, and server-side JavaScript (`$where`, `$function`) is
+  refused.
 - `http-json`: performs an allowlisted GET, blocks redirects, caps response size,
   and compares canonical JSON state.
 
@@ -248,6 +290,44 @@ SHA-256, and the JUnit report carries `baselineSuppressedCount` plus one
 baseline that was merely inconclusive cannot hide a violation the new run found:
 that violation is new.
 
+## Comparing two runs across versions
+
+`--baseline` answers "is this finding new for this project?". A version upgrade
+asks a different question: between two pinned versions, what changed? Scan each
+version, then diff the two reports:
+
+```bash
+safesink mcp-verify safesink.mcp.json --out out/v1.json   # pinned 1.4.0
+safesink mcp-verify safesink.mcp.json --out out/v2.json   # pinned 1.5.0
+safesink compare out/v1.json out/v2.json --markdown out/diff.md
+```
+
+The comparison reports the verdict and score on each side, findings added and
+removed, case statuses that changed, and - the part a score cannot show - which
+observed effect changed on the same case and call. For example:
+
+```
+EFFECT_CHANGED update-row
+  sandbox (firstCall): before modified=1 deleted=0, after modified=0 deleted=1
+```
+
+That is a change in what an observer saw, not proof of intent, and it is the
+difference between "the score dropped" and "this version deletes the row the
+previous one updated".
+
+It also compares the observed boundary. A run that watched fewer observers
+reports `OBSERVED_BOUNDARY_CHANGED`, because two reports over different
+boundaries are not a comparable pair and a smaller boundary must never read as
+an improvement.
+
+`compare` exits 0 when nothing got worse and 2 on a regression: a new finding, a
+new policy violation, a new fatal error, or a worse verdict (`pass` <
+`inconclusive` < `fail`). A score drop on its own is reported as
+`SCORE_DROPPED n` but is not a regression, because it can come from coverage a
+run chose not to have; pass `--max-score-drop N` when a team wants that to gate
+too. `--json` prints the full comparison, and `--markdown` writes the same tables
+for a review comment.
+
 ## PostgreSQL and MySQL
 
 Production data is not usually a local SQLite file. Point an observer at the
@@ -270,6 +350,30 @@ row is destructive, an insert is a change, and anything the query does not selec
 is invisible. Both drivers are optional - install `safesink[postgres]` or
 `safesink[mysql]`; a missing driver is reported as such rather than silently
 skipping the boundary.
+
+### MongoDB
+
+A document database's observable state is a set of documents, so point the
+observer at a collection and, optionally, a filter:
+
+```bash
+safesink mcp-check \
+  --mongodb-query ORDERS_URI=shop.orders \
+  -- npx -y your-mongodb-mcp
+```
+
+The URI comes from `ORDERS_URI` - like a DSN, it usually carries a password and
+must never be written into a manifest or a report. A bounded `find` reads the
+collection (1000 documents by default) and the documents are compared as a
+multiset, sorted, so server order is not part of the state. A removed document
+is destructive; an insert or an update inside the read set is a change.
+
+In a manifest the observer is `kind: "mongodb-query"` with `uriFromEnv`,
+`database` and `collection`, plus optional `filter`, `projection`, `sort`,
+`limit` and `timeoutMs`. The observer refuses server-side JavaScript operators
+(`$where`, `$function`, `$accumulator`): a filter that runs code on the database
+it is measuring is not a read-only observation. Install the optional driver with
+`safesink[mongodb]`; a missing driver is reported, never skipped silently.
 
 ## Protocol revisions
 
