@@ -315,14 +315,19 @@ That is a change in what an observer saw, not proof of intent, and it is the
 difference between "the score dropped" and "this version deletes the row the
 previous one updated".
 
-It also compares the observed boundary. A run that watched fewer observers
-reports `OBSERVED_BOUNDARY_CHANGED`, because two reports over different
-boundaries are not a comparable pair and a smaller boundary must never read as
-an improvement.
+It also compares the observed boundary. Removing an observer is a regression
+(`OBSERVED_BOUNDARY_SHRUNK`, exit 2): a verdict obtained by watching less is not
+an improvement over one that watched more. Adding a boundary or changing one is
+reported as `OBSERVED_BOUNDARY_CHANGED` without gating, because more evidence
+than the earlier run had contradicts nothing.
+
+Both inputs must be an `effectfence.mcp.report.v1` document; anything else is
+refused before a diff is printed, so unrelated JSON cannot produce a confident
+comparison.
 
 `compare` exits 0 when nothing got worse and 2 on a regression: a new finding, a
-new policy violation, a new fatal error, or a worse verdict (`pass` <
-`inconclusive` < `fail`). A score drop on its own is reported as
+new policy violation, a new fatal error, a worse verdict (`pass` <
+`inconclusive` < `fail`), or an observer the earlier run had. A score drop on its own is reported as
 `SCORE_DROPPED n` but is not a regression, because it can come from coverage a
 run chose not to have; pass `--max-score-drop N` when a team wants that to gate
 too. `--json` prints the full comparison, and `--markdown` writes the same tables

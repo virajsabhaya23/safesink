@@ -217,7 +217,8 @@ safesink compare out/v1.json out/v2.json --markdown out/diff.md
 It reports findings added and removed, case statuses that changed, any change in
 the observed boundary, and which observed effect changed on a case (`modified=1`
 became `deleted=1`). Exit 2 means a regression: a new finding, a new policy
-violation, a new fatal error or a worse verdict. See
+violation, a new fatal error, a worse verdict or an observer the earlier run
+watched. See
 [`docs/MCP_CONFORMANCE.md`](docs/MCP_CONFORMANCE.md#comparing-two-runs-across-versions).
 
 ## Accepted findings, with a reason and an expiry

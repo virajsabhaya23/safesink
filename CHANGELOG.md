@@ -20,7 +20,9 @@ All notable changes will be documented here. This project follows Semantic Versi
   (`pr-report.yml`). The workflow that executes the server under test now holds
   only `contents: read`, so a fork pull request can never reach a writable token
   while its code runs; the reporter downloads the evidence, neutralises
-  `@`-mentions in the report text and keeps one sticky comment.
+  `@`-mentions in the report text and keeps one sticky comment. Because
+  `workflow_run.pull_requests` is empty for a fork pull request, it resolves the
+  open pull request by the head commit the run tested.
 
 - Lint findings now carry a `suggestion`: the concrete next step for that tool,
   such as the `--contract` form that fixes the declaration or the annotation to
@@ -30,9 +32,11 @@ All notable changes will be documented here. This project follows Semantic Versi
   conformance reports. It reports findings added and removed, case statuses that
   changed, a changed observed boundary, and which observer saw a different
   effect on the same case and call. Exit 2 marks a regression (a new finding, a
-  new policy violation, a new fatal error or a worse verdict); a score drop is
-  reported as `SCORE_DROPPED` and gates only with `--max-score-drop`. `--json`
-  prints the comparison and `--markdown` writes it for a review comment.
+  new policy violation, a new fatal error, a worse verdict, or an observer the
+  earlier run had); a score drop is reported as `SCORE_DROPPED` and gates only
+  with `--max-score-drop`, and both inputs must be `effectfence.mcp.report.v1`
+  documents. `--json` prints the comparison and `--markdown` writes it for a
+  review comment.
 - `safesink-mcp` serves `describe_rules` from the lint rule table itself, so the
   documented codes, rationale and caveats cannot drift from the codes
   `lint_manifest` emits.
