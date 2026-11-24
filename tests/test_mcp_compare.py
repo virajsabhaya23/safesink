@@ -196,18 +196,33 @@ class CompareReportTests(unittest.TestCase):
         right = report(cases=[case("read", "read_note")])
         self.assertEqual(compare_reports(left, right)["effects"], [])
 
-    def test_a_changed_observed_boundary_is_reported(self) -> None:
+    def test_removing_an_observer_is_a_regression(self) -> None:
+        left = report()
+        left["observers"] = [
+            {"id": "sandbox", "kind": "filesystem", "world": "closed", "sensitive": True},
+            {"id": "orders", "kind": "sqlite-query", "world": "closed", "sensitive": True},
+        ]
+        right = report()
+        right["observers"] = [
+            {"id": "sandbox", "kind": "filesystem", "world": "closed", "sensitive": True}
+        ]
+        comparison = compare_reports(left, right)
+        self.assertEqual(comparison["boundary"]["removed"], ["orders"])
+        self.assertTrue(comparison["regression"])
+        self.assertIn("OBSERVED_BOUNDARY_SHRUNK orders", comparison["summary"])
+
+    def test_adding_an_observer_is_reported_but_not_a_regression(self) -> None:
         left = report()
         left["observers"] = [
             {"id": "sandbox", "kind": "filesystem", "world": "closed", "sensitive": True}
         ]
         right = report()
         right["observers"] = [
-            {"id": "orders", "kind": "sqlite-query", "world": "closed", "sensitive": True}
+            {"id": "sandbox", "kind": "filesystem", "world": "closed", "sensitive": True},
+            {"id": "orders", "kind": "sqlite-query", "world": "closed", "sensitive": True},
         ]
         comparison = compare_reports(left, right)
         self.assertEqual(comparison["boundary"]["added"], ["orders"])
-        self.assertEqual(comparison["boundary"]["removed"], ["sandbox"])
         self.assertIn("OBSERVED_BOUNDARY_CHANGED", comparison["summary"])
         self.assertFalse(comparison["regression"])
 
@@ -282,6 +297,16 @@ class CompareReportTests(unittest.TestCase):
             with self.assertRaises(CompareError):
                 load_report(path)
 
+    def test_load_report_rejects_json_that_is_not_a_conformance_report(self) -> None:
+        other = report(cases=[case("a", "read_a")])
+        other["schemaVersion"] = "effectfence.mcp.compare.v1"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "compare.json"
+            path.write_text(json.dumps(other), encoding="utf-8")
+            with self.assertRaises(CompareError) as raised:
+                load_report(path)
+        self.assertIn("effectfence.mcp.report.v1", str(raised.exception))
+
 
 class CompareCliTests(unittest.TestCase):
     def write(self, root: Path, name: str, value: dict) -> str:
@@ -325,6 +350,32 @@ class CompareCliTests(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             self.assertEqual(payload["schemaVersion"], "effectfence.mcp.compare.v1")
             self.assertFalse(payload["regression"])
+
+    def test_a_shrunken_boundary_exits_2(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            left = report()
+            left["observers"] = [
+                {"id": "sandbox", "kind": "filesystem", "world": "closed", "sensitive": True},
+                {"id": "orders", "kind": "sqlite-query", "world": "closed", "sensitive": True},
+            ]
+            right = report()
+            right["observers"] = [
+                {"id": "sandbox", "kind": "filesystem", "world": "closed", "sensitive": True}
+            ]
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                io.StringIO()
+            ):
+                self.assertEqual(
+                    cli_main(
+                        [
+                            "compare",
+                            self.write(root, "left.json", left),
+                            self.write(root, "right.json", right),
+                        ]
+                    ),
+                    2,
+                )
 
     def test_max_score_drop_turns_a_score_drop_into_a_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

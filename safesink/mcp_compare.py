@@ -17,6 +17,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .mcp_verifier import REPORT_SCHEMA
+
 COMPARE_SCHEMA = "effectfence.mcp.compare.v1"
 
 # ``fail`` is worse than ``inconclusive``, which is worse than ``pass``. An
@@ -38,6 +40,11 @@ def load_report(path: str | Path) -> dict[str, Any]:
         raise CompareError(f"report is invalid JSON: {error}") from error
     if not isinstance(value, dict):
         raise CompareError("report root must be an object")
+    if value.get("schemaVersion") != REPORT_SCHEMA:
+        raise CompareError(
+            f"report schemaVersion must be {REPORT_SCHEMA!r}, got "
+            f"{value.get('schemaVersion')!r}; is this a conformance report?"
+        )
     if not isinstance(value.get("cases"), list):
         raise CompareError("report has no cases array; is this a conformance report?")
     return value
@@ -138,8 +145,10 @@ def compare_reports(
         f"CASE_STATUS_CHANGED {item['caseId']} {item['left']} -> {item['right']}"
         for item in status_changes
     )
-    if boundary["added"] or boundary["removed"] or boundary["changed"]:
+    if boundary["added"] or boundary["changed"]:
         summary.append("OBSERVED_BOUNDARY_CHANGED")
+    if boundary["removed"]:
+        summary.append("OBSERVED_BOUNDARY_SHRUNK " + ", ".join(boundary["removed"]))
     if added_cases:
         summary.append(f"CASES_ADDED {len(added_cases)}")
     if removed_cases:
@@ -147,10 +156,14 @@ def compare_reports(
     if isinstance(score["delta"], int) and score["delta"]:
         direction = "SCORE_IMPROVED" if score["delta"] > 0 else "SCORE_DROPPED"
         summary.append(f"{direction} {abs(score['delta'])}")
-    # Only a new contradiction, a worse verdict, a new policy violation or a new
-    # fatal error is a regression. A score drop alone is reported, not gated: it
-    # can come from coverage the run chose not to have.
-    regression = bool(added or policy_added or verdict_regressed or fatal_added)
+    # Only a new contradiction, a worse verdict, a new policy violation, a new
+    # fatal error or a boundary the earlier run had is a regression. A score drop
+    # alone is reported, not gated: it can come from coverage a run chose not to
+    # have. A verdict obtained by watching less is not an improvement, so dropping
+    # an observer gates; adding one does not.
+    regression = bool(
+        added or policy_added or verdict_regressed or fatal_added or boundary["removed"]
+    )
     return {
         "schemaVersion": COMPARE_SCHEMA,
         "left": left_side,

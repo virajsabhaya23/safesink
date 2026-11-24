@@ -599,7 +599,9 @@ def _limitations(observers: list[dict[str, Any]]) -> list[str]:
     if "mongodb-query" in kinds:
         limitations.append(
             "A MongoDB observer compares only the documents its filter and "
-            "projection return, so writes outside that set are not observed."
+            "projection return, so writes outside that set are not observed; a "
+            "projection without _id leaves no identity to tell an update from a "
+            "removal."
         )
     if "filesystem" not in kinds:
         limitations.append(
@@ -1278,6 +1280,36 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
                 raise ManifestError(
                     f"observer {observer_id!r} requires uriFromEnv (never a literal URI)"
                 )
+            for key in ("filter", "projection"):
+                if key in item and not isinstance(item[key], dict):
+                    raise ManifestError(
+                        f"observer {observer_id!r} {key} must be an object"
+                    )
+            sort = item.get("sort")
+            if sort is not None and (
+                not isinstance(sort, dict)
+                or any(
+                    isinstance(direction, bool) or direction not in {1, -1}
+                    for direction in sort.values()
+                )
+            ):
+                raise ManifestError(
+                    f"observer {observer_id!r} sort must map fields to 1 or -1"
+                )
+            # The observer casts these to int, so a string here would surface as
+            # a ValueError from deep inside verification instead of a manifest error.
+            for key, maximum in (("limit", 100_000), ("timeoutMs", None)):
+                value = item.get(key)
+                if value is None:
+                    continue
+                if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                    raise ManifestError(
+                        f"observer {observer_id!r} {key} must be a positive integer"
+                    )
+                if maximum is not None and value > maximum:
+                    raise ManifestError(
+                        f"observer {observer_id!r} {key} must be at most {maximum}"
+                    )
         if kind in {"sqlite-query", "postgres-query", "mysql-query"} and not isinstance(
             item.get("query"), str
         ):

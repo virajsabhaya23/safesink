@@ -336,6 +336,56 @@ class MongoManifestTests(unittest.TestCase):
             with self.assertRaises(ManifestError):
                 load_manifest(path)
 
+    def test_a_manifest_rejects_a_non_numeric_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_manifest(
+                Path(directory),
+                {
+                    "id": "orders",
+                    "kind": "mongodb-query",
+                    "uriFromEnv": "ORDERS_URI",
+                    "database": "shop",
+                    "collection": "orders",
+                    "limit": "many",
+                },
+            )
+            with self.assertRaises(ManifestError) as raised:
+                load_manifest(path)
+        self.assertIn("limit", str(raised.exception))
+
+    def test_a_manifest_rejects_a_limit_over_the_observer_maximum(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_manifest(
+                Path(directory),
+                {
+                    "id": "orders",
+                    "kind": "mongodb-query",
+                    "uriFromEnv": "ORDERS_URI",
+                    "database": "shop",
+                    "collection": "orders",
+                    "limit": 100_001,
+                },
+            )
+            with self.assertRaises(ManifestError):
+                load_manifest(path)
+
+    def test_a_manifest_rejects_a_sort_direction_other_than_one(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_manifest(
+                Path(directory),
+                {
+                    "id": "orders",
+                    "kind": "mongodb-query",
+                    "uriFromEnv": "ORDERS_URI",
+                    "database": "shop",
+                    "collection": "orders",
+                    "sort": {"created": 2},
+                },
+            )
+            with self.assertRaises(ManifestError) as raised:
+                load_manifest(path)
+        self.assertIn("sort", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

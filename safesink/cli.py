@@ -1260,7 +1260,6 @@ def main(argv: list[str] | None = None, prog: str = "safesink") -> int:
             right_report = load_report(arguments.right)
         except CompareError as error:
             _die(parser, str(error), hint="pass two safesink mcp-verify JSON reports")
-            return 2
         comparison = compare_reports(
             left_report,
             right_report,
