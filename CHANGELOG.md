@@ -2,7 +2,11 @@
 
 All notable changes will be documented here. This project follows Semantic Versioning and the Keep a Changelog structure.
 
-## Unreleased
+## 0.7.0 - 2026-11-24
+
+Manifest schema v2, a MongoDB observer, `safesink compare` and fork-safe
+pull-request reporting. v1 manifests, evaluation rules and scores are unchanged:
+a v1 manifest that passed 0.6.0 passes 0.7.0 as it is.
 
 ### Added
 
@@ -23,7 +27,6 @@ All notable changes will be documented here. This project follows Semantic Versi
   `@`-mentions in the report text and keeps one sticky comment. Because
   `workflow_run.pull_requests` is empty for a fork pull request, it resolves the
   open pull request by the head commit the run tested.
-
 - Lint findings now carry a `suggestion`: the concrete next step for that tool,
   such as the `--contract` form that fixes the declaration or the annotation to
   change. `lint --json` reports it per finding, the terminal output prints it as
