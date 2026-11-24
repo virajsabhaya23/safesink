@@ -63,44 +63,103 @@ _VOLATILE_NAME_TOKENS = {
 _URL_NAME_TOKENS = {"url", "uri", "href", "endpoint", "webhook"}
 _URL_FORMATS = {"uri", "url", "iri"}
 
-# code -> (deduction, rationale, false-positive caveat)
+# code -> title, deduction, rationale, false-positive caveat, and the next step an
+# agent or author should take. ``suggestion`` may name the tool as ``{tool}``; it is
+# rendered per finding so the advice is concrete rather than generic.
 RULES: dict[str, dict[str, Any]] = {
     "NO_DECLARED_ANNOTATIONS": {
+        "title": "No effect annotations",
         "deduction": 5,
         "rationale": "A tool with no annotations makes no claim, so no conformance check can exist for it.",
         "caveat": "Legitimate for servers that predate annotations; declare a CLI contract to verify one.",
+        "suggestion": (
+            "declare the hints the tool can honestly claim; if you cannot edit the "
+            "server, give the verifier a contract with the matching hint, e.g. "
+            "`--contract {tool}=readOnlyHint:true` when it only reads, and confirm it "
+            "with `safesink mcp-check`"
+        ),
     },
     "READ_ONLY_NAME_MISMATCH": {
+        "title": "Read-only claim on a write-sounding name",
         "deduction": 20,
         "rationale": "The name promises a write while readOnlyHint: true promises none.",
         "caveat": "Verb prefixes can be misleading, e.g. `create_index_if_missing` on a cache warm-up.",
+        "suggestion": (
+            "if the tool really only reads, rename it to a read verb; otherwise declare "
+            "`--contract {tool}=readOnlyHint:false` and prove it with `safesink mcp-check`"
+        ),
     },
     "DESTRUCTIVE_NAME_WITH_NON_DESTRUCTIVE_HINT": {
+        "title": "Non-destructive claim on a deleting name",
         "deduction": 20,
         "rationale": "The name promises deletion while destructiveHint: false promises nothing is removed.",
         "caveat": "Soft deletes and archive tools remove nothing observable and can be honest.",
+        "suggestion": (
+            "if it deletes or removes state, declare `--contract "
+            "{tool}=destructiveHint:true`; if it is a soft delete, say so in the description"
+        ),
     },
     "CONTRADICTORY_DESTRUCTIVE_READ_ONLY": {
+        "title": "Read-only and destructive are both true",
         "deduction": 25,
         "rationale": "readOnlyHint: true and destructiveHint: true cannot both be true.",
         "caveat": "None: this is a contradiction in the declaration itself.",
+        "suggestion": (
+            "set `--contract {tool}=destructiveHint:false` (a read-only tool removes "
+            "nothing) or drop readOnlyHint: true"
+        ),
     },
     "OPEN_WORLD_URL_ARGUMENT_MISMATCH": {
+        "title": "Closed-world claim with a URL argument",
         "deduction": 10,
         "rationale": "A tool that accepts a URL can reach the open world, so openWorldHint: false is suspect.",
         "caveat": "A URL may be parsed or compared without being fetched.",
+        "suggestion": (
+            "if the tool fetches the URL, declare `--contract {tool}=openWorldHint:true`; "
+            "otherwise document in the description that the URL is only parsed"
+        ),
     },
     "MUTATING_WITHOUT_IDEMPOTENT_HINT": {
+        "title": "Mutating tool without an idempotency claim",
         "deduction": 10,
         "rationale": "A mutating tool that does not state retry safety leaves the caller to guess.",
         "caveat": "The hint is optional in the protocol; this is an omission, not a lie.",
+        "suggestion": (
+            "declare `--contract {tool}=idempotentHint:true` when repeating the identical "
+            "call is safe, or `idempotentHint:false` when it is not"
+        ),
     },
     "IDEMPOTENT_WITH_VOLATILE_ARGUMENT": {
+        "title": "Idempotent claim with a per-call value",
         "deduction": 15,
         "rationale": "An argument named random/uuid/nonce/timestamp changes on every retry, which cannot be idempotent.",
         "caveat": "The value may be ignored by the tool, or used only for tracing.",
+        "suggestion": (
+            "take the value from the caller (or drop `idempotentHint: true` on {tool}) "
+            "so a retry can send byte-identical arguments"
+        ),
     },
 }
+
+
+def rule_catalog() -> list[dict[str, Any]]:
+    """The one list of lint rules, shared by the CLI, ``describe_rules`` and lint.
+
+    It is derived from ``RULES`` so a documented code cannot drift from the code
+    that is emitted. ``{tool}`` placeholders are rendered as ``<tool>`` because a
+    catalog entry describes the rule, not one finding.
+    """
+    return [
+        {
+            "code": code,
+            "title": RULES[code]["title"],
+            "deduction": RULES[code]["deduction"],
+            "rationale": RULES[code]["rationale"],
+            "caveat": RULES[code]["caveat"],
+            "suggestion": str(RULES[code]["suggestion"]).replace("{tool}", "<tool>"),
+        }
+        for code in sorted(RULES)
+    ]
 
 ANNOTATION_SCORE_MAX = 100
 
@@ -121,6 +180,7 @@ def _findings_for(tool: dict[str, Any]) -> list[dict[str, Any]]:
                 "tool": name,
                 "code": code,
                 "message": message,
+                "suggestion": str(RULES[code]["suggestion"]).replace("{tool}", name),
                 "evidence": evidence or {},
             }
         )
@@ -220,10 +280,14 @@ def lint_tools(tools: list[dict[str, Any]]) -> dict[str, Any]:
             "max": ANNOTATION_SCORE_MAX,
             "breakdown": {
                 code: {
+                    "title": RULES[code]["title"],
                     "count": count,
                     "deductionEach": RULES[code]["deduction"],
                     "rationale": RULES[code]["rationale"],
                     "caveat": RULES[code]["caveat"],
+                    "suggestion": str(RULES[code]["suggestion"]).replace(
+                        "{tool}", "<tool>"
+                    ),
                 }
                 for code, count in sorted(counts.items())
             },

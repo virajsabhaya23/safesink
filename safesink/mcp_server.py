@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from . import __version__
-from .mcp_lint import lint_manifest
+from .mcp_lint import lint_manifest, rule_catalog
 from .mcp_protocol import (
     LEGACY_PROTOCOL_VERSION,
     META_SERVER_INFO,
@@ -40,7 +40,19 @@ LINT_OUTPUT_SCHEMA = {
     "type": "object",
     "required": ["findings", "score", "toolsAdvertised"],
     "properties": {
-        "findings": {"type": "array"},
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["tool", "code", "message", "suggestion"],
+                "properties": {
+                    "tool": {"type": "string"},
+                    "code": {"type": "string"},
+                    "message": {"type": "string"},
+                    "suggestion": {"type": "string"},
+                },
+            },
+        },
         "score": {
             "type": "object",
             "required": ["value", "max"],
@@ -71,7 +83,8 @@ LINT_TOOL: dict[str, Any] = {
     "title": "Lint a SafeSink manifest",
     "description": (
         "Lint a SafeSink manifest's declared tool annotations without starting the "
-        "server. Returns findings, a code for each, and an annotation score."
+        "server. Returns findings, a code and a concrete next step for each, and an "
+        "annotation score."
     ),
     "inputSchema": {
         "type": "object",
@@ -91,7 +104,10 @@ LINT_TOOL: dict[str, Any] = {
 RULES_TOOL: dict[str, Any] = {
     "name": "describe_rules",
     "title": "List SafeSink lint rules",
-    "description": "List the lint rules and what each one asks of a tool declaration.",
+    "description": (
+        "List the lint rules, what each one asks of a tool declaration, its "
+        "false-positive caveat, and the fix to suggest."
+    ),
     "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     "outputSchema": RULES_OUTPUT_SCHEMA,
     "annotations": {"readOnlyHint": True, "openWorldHint": False},
@@ -120,25 +136,6 @@ VERIFY_TOOL: dict[str, Any] = {
         "openWorldHint": True,
     },
 }
-
-RULE_CATALOG = [
-    {
-        "code": "MISSING_READONLY",
-        "ask": "declare readOnlyHint so a caller can tell reads from writes",
-    },
-    {"code": "MISSING_DESTRUCTIVE", "ask": "declare destructiveHint for deleting tools"},
-    {"code": "MISSING_IDEMPOTENT", "ask": "declare idempotentHint where repeats are safe"},
-    {"code": "MISSING_OPEN_WORLD", "ask": "declare openWorldHint for network-facing tools"},
-    {
-        "code": "DESTRUCTIVE_WITHOUT_CONFIRMATION",
-        "ask": "document the confirmation a destructive call needs",
-    },
-    {"code": "VOLATILE_ARGUMENT", "ask": "accept a caller-supplied seed instead of a timestamp"},
-    {
-        "code": "NETWORK_TOOL_WITHOUT_HOST_ALLOWLIST",
-        "ask": "accept a URL argument only with an allowlist",
-    },
-]
 
 
 class ServerError(Exception):
@@ -225,7 +222,9 @@ class SafeSinkMcpServer:
         name = params.get("name")
         arguments = params.get("arguments") or {}
         if name == "describe_rules":
-            return _text({"rules": RULE_CATALOG}, modern=modern)
+            # Derived from the lint rules themselves, so a documented code can
+            # never drift from the codes lint_manifest actually emits.
+            return _text({"rules": rule_catalog()}, modern=modern)
         if name == "lint_manifest":
             manifest = self._manifest(arguments)
             return _text(lint_manifest(manifest), modern=modern)

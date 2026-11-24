@@ -108,7 +108,39 @@ class McpServerTests(unittest.TestCase):
     def test_rules_are_described(self) -> None:
         server = SafeSinkMcpServer(root=self.root)
         payload = json.loads(self.call(server, "describe_rules")["content"][0]["text"])
-        self.assertTrue(any(rule["code"] == "MISSING_READONLY" for rule in payload["rules"]))
+        self.assertTrue(
+            any(rule["code"] == "NO_DECLARED_ANNOTATIONS" for rule in payload["rules"])
+        )
+
+    def test_described_rules_are_the_codes_lint_emits(self) -> None:
+        server = SafeSinkMcpServer(root=self.root)
+        payload = json.loads(self.call(server, "describe_rules")["content"][0]["text"])
+        described = {rule["code"] for rule in payload["rules"]}
+        unannotated = json.loads(json.dumps(GOOD_MANIFEST))
+        unannotated["cases"][0]["contract"] = {}
+        path = self.root / "unannotated.json"
+        path.write_text(json.dumps(unannotated), encoding="utf-8")
+        linted = json.loads(
+            self.call(server, "lint_manifest", path="unannotated.json")["content"][0]["text"]
+        )
+        emitted = {finding["code"] for finding in linted["findings"]}
+        self.assertTrue(emitted)
+        self.assertTrue(emitted <= described)
+        for rule in payload["rules"]:
+            self.assertTrue(rule["suggestion"])
+
+    def test_lint_findings_carry_the_next_step(self) -> None:
+        unannotated = json.loads(json.dumps(GOOD_MANIFEST))
+        unannotated["cases"][0]["contract"] = {}
+        path = self.root / "unannotated.json"
+        path.write_text(json.dumps(unannotated), encoding="utf-8")
+        server = SafeSinkMcpServer(root=self.root)
+        payload = json.loads(
+            self.call(server, "lint_manifest", path="unannotated.json")["content"][0]["text"]
+        )
+        finding = payload["findings"][0]
+        self.assertIn("read_note", finding["suggestion"])
+        self.assertIn("--contract", finding["suggestion"])
 
     def test_the_transport_answers_a_batch_of_lines(self) -> None:
         server = SafeSinkMcpServer(root=self.root)

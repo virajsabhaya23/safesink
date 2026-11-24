@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from safesink.cli import main as cli_main
-from safesink.mcp_lint import RULES, lint_manifest, lint_tools
+from safesink.mcp_lint import RULES, lint_manifest, lint_tools, rule_catalog
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_SERVER = ROOT / "examples/mcp-conformance/fixture_server.py"
@@ -97,10 +97,34 @@ class LintRuleTests(unittest.TestCase):
         breakdown = result["score"]["breakdown"]
         self.assertEqual(breakdown["NO_DECLARED_ANNOTATIONS"]["count"], 1)
         self.assertIn("caveat", breakdown["NO_DECLARED_ANNOTATIONS"])
+        self.assertTrue(breakdown["NO_DECLARED_ANNOTATIONS"]["suggestion"])
         self.assertEqual(
             set(breakdown["NO_DECLARED_ANNOTATIONS"]["rationale"]),
             set(RULES["NO_DECLARED_ANNOTATIONS"]["rationale"]),
         )
+
+    def test_every_rule_carries_advice_an_agent_can_act_on(self) -> None:
+        for code, rule in RULES.items():
+            for field in ("title", "deduction", "rationale", "caveat", "suggestion"):
+                self.assertTrue(rule.get(field), f"{code} is missing {field}")
+            self.assertNotEqual(int(rule["deduction"]), 0, code)
+
+    def test_a_finding_suggests_the_fix_for_that_tool(self) -> None:
+        result = lint_tools([tool("delete_file", {"readOnlyHint": True})])
+        finding = next(
+            item for item in result["findings"] if item["code"] == "READ_ONLY_NAME_MISMATCH"
+        )
+        self.assertIn("readOnlyHint:false", finding["suggestion"])
+        self.assertIn("delete_file", finding["suggestion"])
+        self.assertIn("safesink mcp-check", finding["suggestion"])
+
+    def test_the_catalog_and_lint_share_one_vocabulary(self) -> None:
+        catalog = rule_catalog()
+        self.assertEqual({rule["code"] for rule in catalog}, set(RULES))
+        self.assertEqual([rule["code"] for rule in catalog], sorted(RULES))
+        for rule in catalog:
+            self.assertNotIn("{tool}", rule["suggestion"])
+            self.assertIn("<tool>", rule["suggestion"])
 
     def test_lint_manifest_uses_case_contracts(self) -> None:
         manifest = {
