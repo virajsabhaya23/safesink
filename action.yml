@@ -157,7 +157,7 @@ runs:
         exit "$status"
     - name: Sticky pull request comment
       if: ${{ always() && inputs.comment == 'true' && github.event_name == 'pull_request' }}
-      uses: actions/github-script@v7
+      uses: actions/github-script@v9
       env:
         SAFESINK_REPORT: ${{ inputs.out }}
         SAFESINK_MARKDOWN: ${{ inputs.markdown }}
